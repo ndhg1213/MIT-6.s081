@@ -18,15 +18,21 @@ struct run {
   struct run *next;
 };
 
-struct {
+struct kmem {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+};
+
+struct kmem kmems[NCPU]; //将kalloc的共享freelist改为每个CPU独立的freelist
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  for (int i = 0; i < NCPU; i++)
+  {
+    initlock(&kmems[i].lock, "kmem"); //初始化内存块数组
+  }
+  
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -56,10 +62,14 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  push_off();
+  int id = cpuid(); //在push_off和pop_off包围下安全获取id
+  pop_off();
+
+  acquire(&kmems[id].lock);
+  r->next = kmems[id].freelist; //在id确定的内存块中free
+  kmems[id].freelist = r;
+  release(&kmems[id].lock);
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -70,11 +80,32 @@ kalloc(void)
 {
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  push_off();
+  int id = cpuid(); //在push_off和pop_off包围下安全获取id
+  pop_off();
+
+  acquire(&kmems[id].lock);
+  r = kmems[id].freelist;
+  if(r){
+    kmems[id].freelist = r->next; //有空闲内存块直接分配
+  }else{
+    for (int i = 0; i < NCPU; i++) //当前cpu没有空闲块则从其他cpu空闲内存块中偷取一块
+    {
+      if(i == id){
+        continue;
+      }
+      acquire(&kmems[i].lock); //操纵其他cpu内存块申请锁
+      r = kmems[i].freelist;
+      if(r){
+        kmems[i].freelist = r -> next; 
+        release(&kmems[i].lock); //成功取到空闲内存块后释放锁
+        break;
+      }
+      release(&kmems[i].lock); //没有取到空闲内存块也要释放锁
+    }
+  }
+
+  release(&kmems[id].lock);
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
