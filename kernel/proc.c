@@ -34,12 +34,12 @@ procinit(void)
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+      // char *pa = kalloc();
+      // if(pa == 0)
+      //   panic("kalloc");
+      // uint64 va = KSTACK((int) (p - proc));
+      // kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      // p->kstack = va;
   }
   kvminithart();
 }
@@ -121,6 +121,21 @@ found:
     return 0;
   }
 
+  p -> proc_pagetable = kvmpagetable(); //为每个进程分配内核独立页表
+  if (p -> proc_pagetable == 0){
+    freeproc(p);
+    release(&p -> lock);
+    return 0;
+  }
+
+  char *pa = kalloc(); //将内核栈映射从procinit移除并置于allocproc中
+  if(pa == 0){
+    panic("kalloc");
+  }
+  uint64 va = KSTACK(0); //由于每个进程都有自己的独立内u和页表，故此处(p - proc)恒为0
+  kvmpagetablemap(p -> proc_pagetable, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+  p -> kstack = va;
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -149,6 +164,19 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+
+  //在free内核独立页表前先free内核栈
+  if(p -> kstack){
+    uvmunmap(p -> proc_pagetable, p -> kstack, 1, 1); //第一个参数1表示栈只有一个物理页大小
+  }                                                   //第二个参数1表示执行清除操作
+  p -> kstack = 0;
+
+  //free内核独立页表
+  if(p -> proc_pagetable){ 
+    freeproc_pagetable(p -> proc_pagetable);
+  }
+  p -> proc_pagetable = 0;
+
   p->state = UNUSED;
 }
 
@@ -225,6 +253,8 @@ userinit(void)
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
 
+  uvmcopy_new(p -> pagetable, p -> proc_pagetable, 0, p -> sz); //新建第一个进程独立内核页表的用户页表的映射
+
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
@@ -242,12 +272,27 @@ growproc(int n)
   struct proc *p = myproc();
 
   sz = p->sz;
-  if(n > 0){
+  if(n > 0){ //增大页表映射
+
+    if(sz + n > PLIC){ //用户映射超出范围
+      return -1;
+    }
+
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
-  } else if(n < 0){
-    sz = uvmdealloc(p->pagetable, sz, sz + n);
+
+    if(uvmcopy_new(p -> pagetable, p -> proc_pagetable, p -> sz, sz) < 0){ //p -> sz是未更新的增长起始点，sz是更新后的增长终止点
+      return -1;
+    }
+  } else if(n < 0){ //缩减页表映射
+    sz = uvmdealloc(p->pagetable, sz, sz + n); //uvmdealloc调用uvmunmap并将第四个参数置1清空了物理地址
+
+    //使用uvmunmap并将第四个参数置0清除内核页表
+    //防止出现物理地址重复清除
+    if(PGROUNDUP(sz) < PGROUNDUP(p -> sz)){ 
+      uvmunmap(p -> proc_pagetable, PGROUNDUP(sz), (PGROUNDUP(p -> sz) - PGROUNDUP(sz))/PGSIZE, 0);
+    }
   }
   p->sz = sz;
   return 0;
@@ -274,6 +319,14 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+
+  //将用户页表映射到内核页表
+  if(uvmcopy_new(np -> pagetable, np -> proc_pagetable, 0, np -> sz) < 0){ //注意应该复制子进程页表np而不是父进程页表p
+    freeproc(np);
+    release(&np -> lock);
+    return -1;
+  }
+  np -> sz = p -> sz;
 
   np->parent = p;
 
@@ -473,11 +526,17 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        w_satp(MAKE_SATP(p -> proc_pagetable)); //参照kvminithart页表载入方式
+        sfence_vma();
+
         swtch(&c->context, &p->context);
+
+        kvminithart(); //当前进程结束后需要切换回全局页表
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
-        c->proc = 0;
+        c->proc = 0; // cpu dosen't run any process now
 
         found = 1;
       }

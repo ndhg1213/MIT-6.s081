@@ -116,6 +116,20 @@ exec(char *path, char **argv)
   p->trapframe->sp = sp; // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
 
+  //内核页表虚拟地址指向用户页表物理地址
+  //直接使用uvmunmap清空映射即可
+  uvmunmap(p -> proc_pagetable, 0, PGROUNDUP(oldsz)/PGSIZE, 0); 
+  
+  if(uvmcopy_new(p -> pagetable, p -> proc_pagetable, 0, p -> sz) < 0){
+    goto bad;
+  }
+                                                              
+  if (p -> pid == 1)
+  {
+    vmprint(p -> pagetable);
+  }
+  
+
   return argc; // this ends up in a0, the first argument to main(argc, argv)
 
  bad:
