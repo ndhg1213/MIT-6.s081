@@ -23,6 +23,28 @@ struct {
   struct run *freelist;
 } kmem;
 
+uint64
+fmemcount(void){
+
+  struct run *r;
+  uint64 count = 0;
+  
+  acquire(&kmem.lock); //获取锁
+  r = kmem.freelist;
+  while (r){
+    count++;
+    if (r -> next != kmem.freelist){ //判断循环链表已完全遍历
+      r = r -> next;
+    }
+  }
+
+  count = count*PGSIZE; //内存大小需要乘上每页的byte数
+  release(&kmem.lock); //释放锁
+
+  return count;
+
+}
+
 void
 kinit()
 {
@@ -70,7 +92,7 @@ kalloc(void)
 {
   struct run *r;
 
-  acquire(&kmem.lock);
+  acquire(&kmem.lock); 
   r = kmem.freelist;
   if(r)
     kmem.freelist = r->next;

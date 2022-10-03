@@ -21,6 +21,24 @@ static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
 
+uint64
+fproccount(void){
+
+  struct proc *p;
+  uint64 count = 0;
+
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock); //获取锁
+    if(p->state != UNUSED) {
+      count++; //计算UNUSED进程数目
+    } 
+    release(&p->lock); //释放锁
+  }
+
+  return count;
+  
+}
+
 // initialize the proc table at boot time.
 void
 procinit(void)
@@ -282,6 +300,8 @@ fork(void)
 
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
+
+  np -> mask = p -> mask; //子进程继承父进程的mask
 
   // increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)
