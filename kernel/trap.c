@@ -67,7 +67,27 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } else if((r_scause() == 15) || (r_scause() == 13)){
+    char *mem;
+    uint64 va;
+
+    mem = kalloc();
+    va = r_stval();
+
+    if(mem == 0){ //分配内存失败kill进程
+      p->killed = 1;
+    }else if((va >= p->sz) || (va <= PGROUNDDOWN(p->trapframe->sp))){
+      kfree(mem);      //超出sbrk申请范围或是低于用户栈kill进程
+      p->killed = 1;
+    }else{
+      memset(mem, 0, PGSIZE);
+      va = PGROUNDDOWN(va);
+      if(mappages(p -> pagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
+        kfree(mem);    
+        p->killed = 1;   //映射失败kill进程
+      }
+    }
+  }else{
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;

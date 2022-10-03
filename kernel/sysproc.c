@@ -41,14 +41,27 @@ sys_wait(void)
 uint64
 sys_sbrk(void)
 {
-  int addr;
+  uint64 addr;
   int n;
+
+  struct proc *p = myproc();
 
   if(argint(0, &n) < 0)
     return -1;
-  addr = myproc()->sz;
-  if(growproc(n) < 0)
-    return -1;
+  addr = p->sz;
+
+  if((addr + n >= MAXVA) || (addr + n <= 0)){ //判断堆空间大小
+    return addr;
+  }
+
+  p->sz = addr + n;
+  // if(growproc(n) < 0)
+  //   return -1;
+
+  if(n < 0){ //处理n<0
+    uvmdealloc(p -> pagetable, addr, p->sz);
+  }
+
   return addr;
 }
 
