@@ -1,0 +1,18 @@
+question 1:
+    函数的参数存在寄存器a0~a7中， printf的参数13存于a2中
+
+question 2:
+    在46行调用，编译器通过优化直接得到结果12
+
+question 3:
+    jalr到628 <printf>处
+
+question 4:
+    jalr将34 + 4 = 38存入了ra中
+
+question 5:
+    HE110 World
+    将i设置为0x726c6400，不需要改变57616的值
+
+question 6:
+    寄存器a2的值，printf打印a1和a2的值，a1设置为3，a2没有设置直接打印原值

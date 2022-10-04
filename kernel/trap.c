@@ -77,8 +77,22 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2){
+    
+    p->ticks++;
+    //当interval = 0时不进行alarm
+    if((p->interval != 0) && (p->ticks == p->interval)){
+      
+      //p->trapframe独占一个页面且只有288字节大小
+      //复制的p->utrapframe在p->trapframe后288处即可
+      p->utrapframe = p->trapframe + 288;
+      memmove(p->utrapframe, p->trapframe, sizeof(struct trapframe));
+
+      p->trapframe->epc = p->handler;
+    }
+
     yield();
+  }
 
   usertrapret();
 }

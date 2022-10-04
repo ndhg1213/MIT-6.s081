@@ -121,6 +121,7 @@ panic(char *s)
   printf("panic: ");
   printf(s);
   printf("\n");
+  backtrace();
   panicked = 1; // freeze uart output from other CPUs
   for(;;)
     ;
@@ -131,4 +132,19 @@ printfinit(void)
 {
   initlock(&pr.lock, "pr");
   pr.locking = 1;
+}
+
+void
+backtrace(void)
+{
+  uint64 fp = r_fp();    //获取当前栈帧的frame pointer
+  uint64 top = PGROUNDUP(fp);    //获得边界条件
+  uint64 bottom = PGROUNDDOWN(fp);
+
+  //fp此时不是指针
+  //强转成uint64指针，-2获得下一个frame pointer
+  //解引用获得指针指向内容
+  for( ; fp < top && fp >= bottom; fp = *((uint64 *)fp - 2)){
+    printf("%p\n", *((uint64 *)fp - 1));    //解引用指针得到return address
+  }
 }
