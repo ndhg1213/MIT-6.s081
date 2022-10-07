@@ -111,6 +111,56 @@ walkaddr(pagetable_t pagetable, uint64 va)
   return pa;
 }
 
+uint64
+walkcowaddr(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa;
+  char *mem;
+  uint flags;
+
+
+  if(va >= MAXVA)
+    return 0;
+
+  pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    return 0;
+  if((*pte & PTE_V) == 0)
+    return 0;
+  if((*pte & PTE_U) == 0)
+    return 0;
+  pa = PTE2PA(*pte);
+
+  if((*pte & PTE_W) == 0){ //判断是否能写
+
+    if((*pte & PTE_C) == 0){ //不能写是否是因为COW
+      return 0;
+    }
+
+    if((mem = kalloc()) == 0){ //分配物理内存
+    return 0;
+    }
+
+    memmove(mem, (char*)pa, PGSIZE); //拷贝物理内存
+
+    flags = (PTE_FLAGS(*pte) & (~PTE_C)) | PTE_W;
+
+    //由于是将原物理内存直接拷贝过来所以在新映射前先清除映射
+    uvmunmap(pagetable, PGROUNDDOWN(va), 1, 1);
+
+    if(mappages(pagetable, PGROUNDDOWN(va), PGSIZE, (uint64)mem, flags) != 0){
+      kfree(mem);
+      return 0;
+    }
+
+    return (uint64)mem;
+
+  }
+  
+  return pa;
+}
+
 // add a mapping to the kernel page table.
 // only used when booting.
 // does not flush TLB or enable paging.
@@ -299,19 +349,13 @@ uvmfree(pagetable_t pagetable, uint64 sz)
   freewalk(pagetable);
 }
 
-// Given a parent process's page table, copy
-// its memory into a child's page table.
-// Copies both the page table and the
-// physical memory.
-// returns 0 on success, -1 on failure.
-// frees any allocated pages on failure.
 int
 uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  //char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -319,14 +363,18 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    flags = (PTE_FLAGS(*pte) & (~PTE_W)) | PTE_C;   //子进程的PTE_W置0
+    *pte = PA2PTE(pa) | flags; //使用PA2PTE获得一个标志位干净的父进程pte然后设置标志位
+    //不分配内存
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    //将子进程页表映射到父进程的物理内存
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
+      //kfree(mem);
       goto err;
     }
+    inrefcnt(pa);
   }
   return 0;
 
@@ -358,7 +406,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
+    pa0 = walkcowaddr(pagetable, va0); //判断是否是COW
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
