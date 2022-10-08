@@ -1,0 +1,9 @@
+question 1:
+    caller-save寄存器的内容保存在线程栈上，线程切换后可直接调取
+    callee-save寄存器在切换过程中会被覆盖，需要switch函数保存
+question 2:
+    考虑这样的情况
+    线程1与线程2同时想要插入同一个哈希桶中
+    此时线程1与线程2得到的entry值即擦汗如位置是相同的
+    当线程1调用insert完成插入操作后新的entry值被线程2调用的insert覆盖
+    线程1的插入被覆盖导致missing
