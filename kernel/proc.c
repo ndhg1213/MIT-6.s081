@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -302,6 +303,13 @@ fork(void)
 
   np->state = RUNNABLE;
 
+  for(i = 0; i < NVMA; i++){
+    if(p->vma[i].used){ //将父进程的vma复制给子进程
+      memmove(&(np->vma[i]), &(p->vma[i]), sizeof(p->vma[i]));
+      filedup(p->vma[i].file);  //vma指向文件引用计数加1
+    }
+  }
+
   release(&np->lock);
 
   return pid;
@@ -350,6 +358,22 @@ exit(int status)
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
+    }
+  }
+
+  //进程exit时需要将进程的vma映射全部释放
+  //关闭所有打开的文件
+  //清空文件建立的mmap映射
+  for(int i = 0; i < NVMA; i++){ 
+    if(p->vma[i].used){
+      if(p->vma[i].flag & MAP_SHARED){ //vma指向文件需要写回
+        //从vma指向地址开始写回length长度
+        filewrite(p->vma[i].file, p->vma[i].addr, p->vma[i].length);
+      }
+      fileclose(p->vma[i].file);
+      //清空映射
+      uvmunmap(p->pagetable, p->vma[i].addr, p->vma[i].length/PGSIZE, 1);
+      p->vma[i].used = 0;
     }
   }
 

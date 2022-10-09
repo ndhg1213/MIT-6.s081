@@ -484,3 +484,96 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr;
+  int i, length, prot, flag, fd, offset;
+  struct file *file;
+  struct proc *p;
+
+  p = myproc();
+  //获取参数
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0 || argint(2, &prot) < 0 ||
+    argint(3, &flag) < 0 || argfd(4, &fd, &file) < 0 || argint(5, &offset) < 0){
+      return -1;
+    }
+    length = PGROUNDUP(length);
+
+    //想要写内存时文件必须可写
+    if(!file->writable && (prot & PROT_WRITE) && flag == MAP_SHARED){
+      return -1;
+    }
+
+    //进程分配页表不能超出虚拟地址范围
+    if((p->sz + length) > MAXVA){
+      return -1;
+    }
+
+    for(i = 0; i < NVMA; i++){
+      if(p->vma[i].used == 0){  //这块vma没有被使用
+        p->vma[i].used = 1;
+        p->vma[i].addr = p->sz; //mmap映射起始点在当前进程的最后
+        p->vma[i].length = length;
+        p->vma[i].prot = prot;
+        p->vma[i].flag = flag;
+        p->vma[i].fd = fd;
+        p->vma[i].offset = offset;
+        p->vma[i].file = file;
+        filedup(file);
+        p->sz = p->sz + length;  //懒分配值增加大小
+        return p->vma[i].addr;
+      }
+    }
+
+    return -1;  //所有vma都被使用
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  struct proc *p;
+  struct vma *vma = 0;
+  int i, length;
+
+  p = myproc();
+
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0){
+    return -1;
+  }
+
+  addr = PGROUNDDOWN(addr);
+  length = PGROUNDUP(length);
+
+  for(i = 0; i < NVMA; i++){
+    //参数addr在mmap映射范围内
+    if(addr >= p->vma[i].addr || addr < (p->vma[i].addr + p->vma[i].length)){
+        vma = &p->vma[i];
+        break;
+    }
+  }
+
+  if(vma == 0){ //符合条件的vma已经是空指针
+    return 0;
+  }
+
+  if(vma->addr == addr){  //只有在起始处才munmap
+    vma->addr = vma->addr + length; //vma对应地址增加避免出现空洞
+    vma->length = vma->length - length;
+    
+    if(vma->flag & MAP_SHARED){  //需要写回
+      filewrite(vma->file, addr, length);
+    }
+    //设置do_free为1只清空映射
+    uvmunmap(p->pagetable, addr, length/PGSIZE, 1);
+    
+    if(vma->length == 0){  //vma的所有映射都被munmap
+      fileclose(vma->file);
+      vma->used = 0;
+    }
+  }
+  
+  return 0;
+}

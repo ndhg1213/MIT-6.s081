@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -67,7 +71,48 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } else if(r_scause() == 13 || r_scause() == 15){ //因为未映射出现page fault
+    //查找进程的vma
+    struct vma *vma = 0;
+    uint64 va = PGROUNDDOWN(r_stval());
+    for(int i = 0; i < NVMA; i++){
+      //进程的vma标记为使用
+      //发生缺页故障的页表位于vma记录的应当存在文件但只有映射的区域查找成功
+      if(p->vma[i].used == 1 && r_stval() < p->vma[i].addr + p->vma[i].length &&
+        r_stval() >= p->vma[i].addr){
+          vma = &p->vma[i];
+          break;
+        }
+    }
+
+    if(!vma){
+      p->killed = 1;
+    }else{
+      va = PGROUNDDOWN(va);
+      uint64 offset = va - vma->addr; //在假定参数offset为0时获取读偏移量
+      char *mem = kalloc();
+      if(mem == 0){
+        p->killed = 1;
+      }else{
+        memset(mem, 0, PGSIZE);
+        ilock(vma->file->ip);  //申请vma中file指向的inode的锁
+        readi(vma->file->ip, 0, (uint64)mem, offset, PGSIZE);
+        iunlock(vma->file->ip);  //读结束后释放锁
+
+        //设置标志位
+        int flag = PTE_U;
+        if(vma->prot & PROT_READ) flag |= PTE_R;
+        if(vma->prot & PROT_WRITE) flag |= PTE_W;
+        if(vma->prot & PROT_EXEC) flag |= PTE_X;
+
+        //建立映射
+        if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, flag) != 0){
+          kfree(mem);
+          p->killed = 1;
+        }
+      }
+    }
+    }else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
