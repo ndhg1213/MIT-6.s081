@@ -284,6 +284,35 @@ create(char *path, short type, short major, short minor)
 }
 
 uint64
+sys_symlink(void)
+{
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+  int n;
+
+  //获取参数
+  if((n = argstr(0, target, MAXPATH)) < 0 || argstr(1, path, MAXPATH) < 0){
+    return -1;
+  }
+
+  begin_op();
+  if((ip = create(path, T_SYMLINK, 0, 0)) == 0){ //创建T_SYMLINK类型的inode
+    end_op();
+    return -1;
+  }
+
+  if(writei(ip, 0, (uint64)target, 0, n) != n){ //将路径写入inode
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
+  return 0;
+}
+
+uint64
 sys_open(void)
 {
   char path[MAXPATH];
@@ -320,6 +349,47 @@ sys_open(void)
     iunlockput(ip);
     end_op();
     return -1;
+  }
+
+  if(ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0){
+    int i, j;
+    uint inums[SYMLINK];
+    char target[MAXPATH];
+
+    for(i = 0; i < SYMLINK; i++){ //在最大递归深度内跟随符号链接
+      inums[i] = ip->inum; //记录每个符号链接的inum值用于环的判断
+
+      if(readi(ip, 0, (uint64)target, 0, MAXPATH) <= 0){
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+      iunlockput(ip); //无论是否成功读取ip内容都不再需要ip
+
+      if((ip = namei(target)) == 0){ //符号链接对应文件不存在
+        end_op();
+        return -1;
+      }
+
+      for(j = 0; j <= i; j++){ //判断是否成环
+        if(inums[j] == ip->inum){
+          end_op();
+          return -1;
+        }
+      }
+      ilock(ip); //读取ip类型需要获取锁
+
+      if(ip->type != T_SYMLINK){ //查找成功
+        break;
+      }
+
+    }
+
+    if(i == SYMLINK){
+      iunlockput(ip); //达到最大递归深度后仍未找到
+      end_op();
+      return -1;
+    }
   }
 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
