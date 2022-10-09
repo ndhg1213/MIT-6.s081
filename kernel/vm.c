@@ -142,7 +142,7 @@ walkcowaddr(pagetable_t pagetable, uint64 va)
     return 0;
     }
 
-    memmove(mem, (char*)pa, PGSIZE); //拷贝物理内存
+    memmove(mem, (void*)pa, PGSIZE); //拷贝物理内存
 
     flags = (PTE_FLAGS(*pte) & (~PTE_C)) | PTE_W;
 
