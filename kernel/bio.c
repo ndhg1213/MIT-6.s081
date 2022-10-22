@@ -95,14 +95,12 @@ bget(uint dev, uint blockno)
   release(&bcache.lock[id]);
 
   acquire(&bcache.biglock); //可能需要操纵相邻桶缓存块，申请大锁
-  acquire(&bcache.lock[id]);
   
   //在归还锁后由于并发性其他进程可能在此让出缓存块
   //重新扫描一次
   for(b = bcache.hashbucket[id].next; b != &bcache.hashbucket[id]; b = b->next){
     if(b->dev == dev && b->blockno == blockno) {
       b->refcnt++;
-      release(&bcache.lock[id]);
       release(&bcache.biglock);
       acquiresleep(&b->lock);
       return b;
@@ -123,7 +121,6 @@ bget(uint dev, uint blockno)
     temp->blockno = blockno;
     temp->refcnt++;
     temp->valid = 0;
-    release(&bcache.lock[id]); //依次释放获得的锁，防止出现死锁
     release(&bcache.biglock);
     acquiresleep(&temp -> lock);
     return temp;
@@ -149,7 +146,6 @@ bget(uint dev, uint blockno)
         temp -> prev = &bcache.hashbucket[id];
         bcache.hashbucket[id].next -> prev = temp;
         bcache.hashbucket[id].next = temp;
-        release(&bcache.lock[id]); 
         release(&bcache.biglock);
         acquiresleep(&temp -> lock);
         return temp;
@@ -157,7 +153,6 @@ bget(uint dev, uint blockno)
     }
   }
 
-  release(&bcache.lock[id]);
   release(&bcache.biglock);
   panic("bget: no buffers");
 
